@@ -2,8 +2,6 @@ import os
 import ast
 from typing import List, Dict, Any
 
-
-# Set of custom attribute class names to exclude from scanning
 CUSTOM_ATTRIBUTE_CLASSES = {
     "AttributeValidationError",
     "BooleanAttribute",
@@ -19,7 +17,6 @@ CUSTOM_ATTRIBUTE_CLASSES = {
 
 class CodebaseScanner:
     def __init__(self):
-        # You can initialize any necessary variables here
         pass
 
     def scan_codebase(self, root_dir: str = '.') -> List[Dict]:
@@ -58,77 +55,40 @@ class CodebaseScanner:
         attributes = []
         for node in class_node.body:
             if isinstance(node, ast.AnnAssign):
-                # Ensure that the assignment has a target and a value
                 if not node.target or not node.value:
                     continue
 
-                # Handle cases where the value is a call to a custom attribute class
                 if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
                     custom_attr_type = node.value.func.id
                     if custom_attr_type in CUSTOM_ATTRIBUTE_CLASSES:
                         attr_args = {kw.arg: self.parse_arg_value(kw.value) for kw in node.value.keywords}
                         attr_key = attr_args.get('attribute_key', self.to_camel_case(node.target.id))
                         
-                        # Determine if the attribute is optional based on the annotation
-                        is_optional = False
-                        if isinstance(node.annotation, ast.Subscript):
-                            # Check if it's Optional[...] or Union[..., None]
-                            if (isinstance(node.annotation.value, ast.Name) and
-                                node.annotation.value.id == 'Optional'):
-                                is_optional = True
-                            elif (isinstance(node.annotation.value, ast.Name) and
-                                  node.annotation.value.id == 'Union'):
-                                # Handle Union[..., None]
-                                for sub in node.annotation.slice.elts:
-                                    if isinstance(sub, ast.NameConstant) and sub.value is None:
-                                        is_optional = True
-                                        break
+                        is_optional = self.check_optional(node.annotation)
 
                         attributes.append({
                             'key': attr_key,
                             'type': custom_attr_type,
                             'required': attr_args.get('required', False),
                             'optional': is_optional,
-                            **attr_args  # Include other arguments like size, min, etc.
+                            **attr_args
                         })
-                else:
-                    # Handle cases where the annotation is a standard type but assigned a custom attribute
-                    # e.g., description: Optional[str] = StringAttribute(...)
-                    if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
-                        custom_attr_type = node.value.func.id
-                        if custom_attr_type in CUSTOM_ATTRIBUTE_CLASSES:
-                            attr_args = {kw.arg: self.parse_arg_value(kw.value) for kw in node.value.keywords}
-                            attr_key = attr_args.get('attribute_key', self.to_camel_case(node.target.id))
-                            
-                            # Determine if the attribute is optional based on the annotation
-                            is_optional = False
-                            if isinstance(node.annotation, ast.Subscript):
-                                # Check if it's Optional[...] or Union[..., None]
-                                if (isinstance(node.annotation.value, ast.Name) and
-                                    node.annotation.value.id == 'Optional'):
-                                    is_optional = True
-                                elif (isinstance(node.annotation.value, ast.Name) and
-                                      node.annotation.value.id == 'Union'):
-                                    # Handle Union[..., None]
-                                    for sub in node.annotation.slice.elts:
-                                        if isinstance(sub, ast.NameConstant) and sub.value is None:
-                                            is_optional = True
-                                            break
-
-                            attributes.append({
-                                'key': attr_key,
-                                'type': custom_attr_type,
-                                'required': attr_args.get('required', False),
-                                'optional': is_optional,
-                                **attr_args  # Include other arguments like size, min, etc.
-                            })
 
         return attributes
 
+    def check_optional(self, annotation):
+        if isinstance(annotation, ast.Subscript):
+            if (isinstance(annotation.value, ast.Name) and annotation.value.id == 'Optional'):
+                return True
+            elif (isinstance(annotation.value, ast.Name) and annotation.value.id == 'Union'):
+                for sub in annotation.slice.elts:
+                    if isinstance(sub, ast.NameConstant) and sub.value is None:
+                        return True
+        return False
+
     @staticmethod
     def parse_arg_value(node: ast.AST) -> Any:
-        # Handle different AST node types for constants
-        if isinstance(node, ast.Constant):  # For Python 3.8+
+        if isinstance(node, ast.Constant):
             return node.value
         elif isinstance(node, ast.Str):
             return node.s
@@ -137,9 +97,10 @@ class CodebaseScanner:
         elif isinstance(node, ast.NameConstant):
             return node.value
         elif isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
-            # Handle negative numbers
             if isinstance(node.operand, ast.Num):
                 return -node.operand.n
+        elif isinstance(node, ast.List):
+            return [CodebaseScanner.parse_arg_value(elt) for elt in node.elts]
         return None
 
     @staticmethod
